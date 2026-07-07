@@ -230,3 +230,11 @@ if __name__ == "__main__":
         print("Este script está pensado para Windows (usa os.startfile).")
     app = App()
     app.mainloop()
+
+
+"""
+proximos pasos
+    * Agregar programas instalados del sistema.
+    * Agregar funciones extras.
+    * Agregar accesos directos a los perfiles desde el inico o barra de tareas.
+"""
