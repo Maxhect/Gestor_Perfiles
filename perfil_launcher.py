@@ -26,6 +26,7 @@ Los datos se guardan en:  %APPDATA%\\PerfilLauncher\\perfiles.json
 """
 
 import argparse
+import datetime
 import importlib
 import json
 import os
@@ -156,7 +157,20 @@ APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
 CONFIG_DIR = os.path.join(APPDATA, "PerfilLauncher")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "perfiles.json")
 
-PERFIL_VACIO = {"items": [], "icono": None, "auto_inicio": False}
+DIAS_SEMANA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+DIAS_ABREV = ["L", "M", "X", "J", "V", "S", "D"]
+
+def perfil_vacio():
+    """Nuevo diccionario de perfil con valores por defecto (listas independientes)."""
+    return {"items": [], "icono": None, "auto_inicio": False, "dias_activos": list(range(7))}
+
+
+def dia_permitido(perfil):
+    """True si hoy es uno de los días configurados para este perfil (todos por defecto)."""
+    dias = perfil.get("dias_activos")
+    if dias is None:
+        return True
+    return datetime.date.today().weekday() in dias
 
 
 def cargar_perfiles():
@@ -174,7 +188,7 @@ def cargar_perfiles():
         if isinstance(valor, list):
             normalizado[nombre] = {"items": valor, "icono": None, "auto_inicio": False}
         else:
-            perfil = dict(PERFIL_VACIO)
+            perfil = perfil_vacio()
             perfil.update(valor)
             normalizado[nombre] = perfil
     return normalizado
@@ -250,17 +264,22 @@ def lanzar_items(items):
         abrir_item(item["ruta"], item.get("args", ""))
 
 
-def lanzar_perfil_con_cooldown(nombre_perfil, items, cooldown=COOLDOWN_SEGUNDOS, forzar=False):
-    """Lanza los items del perfil, salvo que ya se haya lanzado hace menos de
-    `cooldown` segundos (evita aperturas duplicadas por doble clic, el icono
-    flotante, la bandeja del sistema y los accesos directos de Windows a la
-    vez). Devuelve True si efectivamente lanzó algo, False si lo bloqueó."""
+def lanzar_perfil_con_cooldown(nombre_perfil, perfil, cooldown=COOLDOWN_SEGUNDOS, forzar=False):
+    """Lanza los items del perfil, salvo que:
+      - hoy no sea uno de sus 'días activos' configurados, o
+      - ya se haya lanzado hace menos de `cooldown` segundos
+        (esto último evita aperturas duplicadas por doble clic, el icono
+        flotante, la bandeja del sistema y los accesos directos de Windows a
+        la vez).
+    Devuelve 'ok', 'dia_no_permitido' o 'cooldown'."""
+    if not forzar and not dia_permitido(perfil):
+        return "dia_no_permitido"
     transcurrido = segundos_desde_ultimo_lanzamiento(nombre_perfil)
     if not forzar and transcurrido is not None and transcurrido < cooldown:
-        return False
-    lanzar_items(items)
+        return "cooldown"
+    lanzar_items(perfil.get("items", []))
     registrar_lanzamiento(nombre_perfil)
-    return True
+    return "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -687,6 +706,20 @@ class App(tk.Tk):
         )
         self.chk_bandeja.pack(side="left", padx=6)
 
+        # Días en que se activa el perfil
+        barra_dias = ttk.LabelFrame(der, text="Días en que se activa este perfil", padding=8)
+        barra_dias.pack(fill="x", pady=(5, 5))
+
+        self.vars_dias = []
+        for abrev in DIAS_ABREV:
+            var = tk.BooleanVar(value=True)
+            chk = ttk.Checkbutton(barra_dias, text=abrev, variable=var, command=self._guardar_dias_activos)
+            chk.pack(side="left", padx=5)
+            self.vars_dias.append(var)
+
+        ttk.Button(barra_dias, text="Todos", command=lambda: self._marcar_dias(True)).pack(side="left", padx=(12, 3))
+        ttk.Button(barra_dias, text="Ninguno", command=lambda: self._marcar_dias(False)).pack(side="left")
+
         ttk.Label(der, text="Programas y archivos incluidos:").pack(anchor="w", pady=(12, 3))
 
         cols = ("nombre", "ruta", "args")
@@ -715,7 +748,7 @@ class App(tk.Tk):
         """Diccionario del perfil actualmente seleccionado (o None)."""
         if not self.perfil_actual:
             return None
-        return self.perfiles.setdefault(self.perfil_actual, dict(PERFIL_VACIO))
+        return self.perfiles.setdefault(self.perfil_actual, perfil_vacio())
 
     def _on_seleccionar_perfil(self, event=None):
         sel = self.lista_perfiles.curselection()
@@ -731,8 +764,25 @@ class App(tk.Tk):
         self.var_auto_inicio.set(bool(self._perfil().get("auto_inicio")))
         self.var_flotante.set(nombre in self.iconos_flotantes)
         self.var_bandeja.set(BarraTareaPerfil.activo(nombre))
+        dias_activos = set(self._perfil().get("dias_activos", list(range(7))))
+        for i, var in enumerate(self.vars_dias):
+            var.set(i in dias_activos)
         self._refrescar_tabla()
         self._refrescar_icono_cabecera()
+
+    def _guardar_dias_activos(self):
+        perfil = self._perfil()
+        if not perfil:
+            return
+        perfil["dias_activos"] = [i for i, var in enumerate(self.vars_dias) if var.get()]
+        guardar_perfiles(self.perfiles)
+
+    def _marcar_dias(self, valor):
+        if not self.perfil_actual:
+            return
+        for var in self.vars_dias:
+            var.set(valor)
+        self._guardar_dias_activos()
 
     def _nuevo_perfil(self):
         nombre = simpledialog.askstring("Nuevo perfil", "Nombre del perfil (ej: Trabajo):", parent=self)
@@ -744,7 +794,7 @@ class App(tk.Tk):
         if nombre in self.perfiles:
             messagebox.showwarning("Ya existe", "Ya existe un perfil con ese nombre.")
             return
-        self.perfiles[nombre] = dict(PERFIL_VACIO)
+        self.perfiles[nombre] = perfil_vacio()
         self.perfiles[nombre]["items"] = []
         guardar_perfiles(self.perfiles)
         self._refrescar_lista_perfiles()
@@ -879,11 +929,12 @@ class App(tk.Tk):
         self.var_bandeja.set(True)
 
     def _lanzar_con_cooldown_silencioso(self, nombre_perfil):
-        """Usado por el icono flotante y el de la bandeja: si el perfil ya se
-        lanzó hace menos de 2 minutos, simplemente no hace nada (sin ventanas
-        emergentes que interrumpan)."""
-        items = self.perfiles.get(nombre_perfil, {}).get("items", [])
-        lanzar_perfil_con_cooldown(nombre_perfil, items)
+        """Usado por el icono flotante y el de la bandeja: si hoy no es un
+        día activo del perfil, o si ya se lanzó hace menos de 2 minutos,
+        simplemente no hace nada (sin ventanas emergentes que interrumpan)."""
+        perfil = self.perfiles.get(nombre_perfil)
+        if perfil:
+            lanzar_perfil_con_cooldown(nombre_perfil, perfil)
 
     # ---------------- Lógica de items ----------------
     def _refrescar_tabla(self):
@@ -1007,23 +1058,36 @@ class App(tk.Tk):
         perfil = self._perfil()
         if not perfil:
             return
-        items = perfil.get("items", [])
-        if not items:
+        if not perfil.get("items"):
             messagebox.showinfo("Perfil vacío", "Este perfil no tiene archivos ni programas agregados.")
             return
 
-        if lanzar_perfil_con_cooldown(self.perfil_actual, items):
+        estado = lanzar_perfil_con_cooldown(self.perfil_actual, perfil)
+        if estado == "ok":
             return
 
-        transcurrido = segundos_desde_ultimo_lanzamiento(self.perfil_actual) or 0
-        restante = max(1, int(COOLDOWN_SEGUNDOS - transcurrido))
-        if messagebox.askyesno(
-            "Ya se inició hace poco",
-            f"'{self.perfil_actual}' ya se abrió hace menos de 2 minutos "
-            f"(faltan ~{restante} seg. para poder repetirlo automáticamente).\n\n"
-            "¿Quieres iniciarlo de todas formas?",
-        ):
-            lanzar_perfil_con_cooldown(self.perfil_actual, items, forzar=True)
+        if estado == "dia_no_permitido":
+            dias_activos = sorted(perfil.get("dias_activos", []))
+            texto_dias = ", ".join(DIAS_SEMANA[d] for d in dias_activos) if dias_activos else "ningún día"
+            hoy = DIAS_SEMANA[datetime.date.today().weekday()]
+            if messagebox.askyesno(
+                "No programado para hoy",
+                f"'{self.perfil_actual}' está configurado para abrirse solo: {texto_dias}.\n"
+                f"Hoy es {hoy}.\n\n¿Quieres iniciarlo de todas formas?",
+            ):
+                lanzar_perfil_con_cooldown(self.perfil_actual, perfil, forzar=True)
+            return
+
+        if estado == "cooldown":
+            transcurrido = segundos_desde_ultimo_lanzamiento(self.perfil_actual) or 0
+            restante = max(1, int(COOLDOWN_SEGUNDOS - transcurrido))
+            if messagebox.askyesno(
+                "Ya se inició hace poco",
+                f"'{self.perfil_actual}' ya se abrió hace menos de 2 minutos "
+                f"(faltan ~{restante} seg. para poder repetirlo automáticamente).\n\n"
+                "¿Quieres iniciarlo de todas formas?",
+            ):
+                lanzar_perfil_con_cooldown(self.perfil_actual, perfil, forzar=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1040,7 +1104,7 @@ def main():
         perfiles = cargar_perfiles()
         perfil = perfiles.get(args.lanzar)
         if perfil:
-            lanzar_perfil_con_cooldown(args.lanzar, perfil.get("items", []))
+            lanzar_perfil_con_cooldown(args.lanzar, perfil)
         return
 
     if sys.platform != "win32":
