@@ -1,6 +1,7 @@
-Para utilizar descargar files.zip
+Para utilizar 
+  descargar files.zip
 
-Como utilizar 
+Como Iniciar 
   Iniciar archivo .bat
 
   <img width="469" height="350" alt="image" src="https://github.com/user-attachments/assets/b28b563f-ad36-41f9-961d-3d6455f14b5c" />
